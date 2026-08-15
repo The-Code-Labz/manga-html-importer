@@ -1,0 +1,13 @@
+{
+  "name": "manga-html-importer",
+  "type": "node",
+  "version": "22",
+  "port": 4050,
+  "install": "npm install && npm run build",
+  "start": "./start.sh",
+  "health": "/health",
+  "env": {
+    "NODE_ENV": "production",
+    "PORT": "4050"
+  }
+}

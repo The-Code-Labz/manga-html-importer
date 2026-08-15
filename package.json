@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-    "start": "node dist/cli.js",
+    "start": "node dist/server.js",
+    "start:cli": "node dist/cli.js",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -24,9 +25,16 @@
   "license": "MIT",
   "dependencies": {
     "commander": "^12.1.0",
-    "htmlparser2": "^9.1.0"
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "htmlparser2": "^9.1.0",
+    "multer": "^2.2.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0"
