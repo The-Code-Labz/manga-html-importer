@@ -1,0 +1,37 @@
+{
+  "name": "manga-html-importer",
+  "version": "1.0.0",
+  "description": "Parse readm.today profile HTML files and extract full manga titles, slugs, covers, and list sections for import into Manga Sanctuary.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "manga-html-importer": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "manga",
+    "readm.today",
+    "importer",
+    "parser",
+    "sanctuary"
+  ],
+  "author": "The Code Labz",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "htmlparser2": "^9.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
