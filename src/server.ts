@@ -4,6 +4,7 @@ import express, { type Request, type Response } from 'express'
 import { unlinkSync } from 'node:fs'
 import multer from 'multer'
 import os from 'node:os'
+import { renderDocsPage } from './docs.js'
 import { lookupComick } from './comick.js'
 import { parseHtmlFile, parseHtmlString } from './parser.js'
 import type { ParseOptions, ParsedManga, ParseResult } from './types.js'
@@ -75,6 +76,15 @@ async function applyComick(result: ParseResult, opts: ParseOptions): Promise<Par
 
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'manga-html-importer' })
+})
+
+app.get('/docs', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  res.send(renderDocsPage())
+})
+
+app.get('/', (req: Request, res: Response) => {
+  res.redirect('/docs')
 })
 
 app.post(
