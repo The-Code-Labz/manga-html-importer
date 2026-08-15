@@ -2,11 +2,16 @@ import 'dotenv/config'
 import cors from 'cors'
 import express, { type Request, type Response } from 'express'
 import { unlinkSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import multer from 'multer'
 import os from 'node:os'
 import { lookupComick } from './comick.js'
 import { parseHtmlFile, parseHtmlString } from './parser.js'
 import type { ParseOptions, ParsedManga, ParseResult } from './types.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const PORT = parseInt(process.env.PORT ?? '4050', 10)
 const API_KEY = process.env.API_KEY
@@ -75,6 +80,11 @@ async function applyComick(result: ParseResult, opts: ParseOptions): Promise<Par
 
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'manga-html-importer' })
+})
+
+app.use('/docs', express.static(path.join(__dirname, '../docs')))
+app.get('/', (req: Request, res: Response) => {
+  res.redirect('/docs')
 })
 
 app.post(
