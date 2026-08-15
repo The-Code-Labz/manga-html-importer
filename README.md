@@ -6,6 +6,8 @@ Includes a CLI and an HTTP API.
 
 **Live Forge deployment:** `https://manga-html-importer.forge.neurolearninglabs.com`
 
+**Interactive API docs:** open `/docs` on any running instance (includes a **Copy Markdown** button).
+
 ## Why
 
 Docuflow and other document parsers strip the HTML structure and return only the **truncated** titles shown on the page (e.g. `I Became the Ta..`). This tool parses the raw HTML with a streaming parser and derives the full title from the canonical URL slug.
