@@ -4,7 +4,7 @@
   "version": "22",
   "port": 4050,
   "install": "npm install && npm run build",
-  "start": "./start.sh",
+  "start": "node dist/server.js",
   "health": "/health",
   "env": {
     "NODE_ENV": "production",

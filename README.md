@@ -4,6 +4,8 @@ Parse **readm.today** profile HTML files and extract full manga titles, slugs, c
 
 Includes a CLI and an HTTP API.
 
+**Live Forge deployment:** `https://manga-html-importer.forge.neurolearninglabs.com`
+
 ## Why
 
 Docuflow and other document parsers strip the HTML structure and return only the **truncated** titles shown on the page (e.g. `I Became the Ta..`). This tool parses the raw HTML with a streaming parser and derives the full title from the canonical URL slug.

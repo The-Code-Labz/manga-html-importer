@@ -88,10 +88,10 @@ export function extractCoverPath(attr: string): string {
   // data-img often looks like "1721041464.jpg"
   const match = attr.match(/\/([^/]+\.(?:jpg|jpeg|png|webp|gif|avif))$/i)
   if (match) {
-    return match[1]
+    return match[1].replace(/_\d+x\d+(?=\.|$)/i, '')
   }
 
-  // Strip dimension suffixes like "_30x0" from the filename
+  // Strip dimension suffixes like "_30x0" from the filename while preserving extension
   const base = attr.split('/').pop() ?? attr
-  return base.replace(/_\d+x\d+(?:\.[^.]+)?$/, '')
+  return base.replace(/_\d+x\d+(?=\.|$)/i, '')
 }
