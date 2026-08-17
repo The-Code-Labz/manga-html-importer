@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import multer from 'multer'
 import os from 'node:os'
+import { deepParseFiles, deepParseString } from './deepParser.js'
 import { lookupComick } from './comick.js'
 import { parseHtmlFile, parseHtmlString } from './parser.js'
-import { rescueTitles } from './rescue.js'
+import { rescueTitles, waybackSample } from './rescue.js'
 import type { ParsedManga, ParseOptions, ParseResult, RescueOptions } from './types.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -88,7 +89,8 @@ function rescueOptionsFromQuery(req: Request): RescueOptions {
     comickTimeout: timeout,
     kitsu: req.query.kitsu === 'true' || req.query.kitsu === '1',
     anilist: req.query.anilist === 'true' || req.query.anilist === '1',
-    wayback: req.query.wayback === 'true' || req.query.wayback === '1'
+    wayback: req.query.wayback === 'true' || req.query.wayback === '1',
+    waybackTimeout: parseInt(String(req.query.waybackTimeout ?? '10000'), 10)
   }
 }
 
@@ -261,6 +263,150 @@ app.post('/rescue', requireApiKey, async (req: Request, res: Response) => {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Internal server error',
       code: 'rescue_error'
+    } as ApiError)
+  }
+})
+
+
+app.post('/deep-parse', requireApiKey, upload.array('files'), async (req: Request, res: Response) => {
+  try {
+    const files = (req.files ?? []) as Express.Multer.File[]
+    if (files.length === 0) {
+      res.status(400).json({ error: 'No files uploaded', code: 'no_files' } as ApiError)
+      return
+    }
+
+    const result = await deepParseFiles(files.map((f) => f.path))
+
+    for (const file of files) {
+      try {
+        unlinkSync(file.path)
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+
+    res.json(result)
+  } catch (err) {
+    console.error('[api] deep-parse error', err)
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error',
+      code: 'deep_parse_error'
+    } as ApiError)
+  }
+})
+
+app.post('/deep-parse-text', requireApiKey, async (req: Request, res: Response) => {
+  try {
+    const html = String(req.body?.html ?? '')
+    const fileName = String(req.body?.filename ?? 'upload.html')
+    if (!html) {
+      res.status(400).json({ error: 'Missing html body', code: 'missing_html' } as ApiError)
+      return
+    }
+
+    const result = await deepParseString(html, fileName)
+    res.json(result)
+  } catch (err) {
+    console.error('[api] deep-parse-text error', err)
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error',
+      code: 'deep_parse_error'
+    } as ApiError)
+  }
+})
+
+app.post('/wayback-sample', requireApiKey, async (req: Request, res: Response) => {
+  try {
+    const slugs = Array.isArray(req.body?.slugs) ? (req.body.slugs as string[]) : null
+    if (!slugs || slugs.length === 0) {
+      res.status(400).json({ error: 'Expected JSON body with slugs array', code: 'bad_request' } as ApiError)
+      return
+    }
+
+    const limit = parseInt(String(req.query.limit ?? '20'), 10)
+    const timeoutMs = parseInt(String(req.query.timeoutMs ?? '10000'), 10)
+    const parseTitles = req.query.parseTitles !== 'false'
+
+    const result = await waybackSample(slugs, { limit, timeoutMs, parseTitles })
+    res.json(result)
+  } catch (err) {
+    console.error('[api] wayback-sample error', err)
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error',
+      code: 'wayback_sample_error'
+    } as ApiError)
+  }
+})
+
+app.post('/parse-and-rescue', requireApiKey, upload.array('files'), async (req: Request, res: Response) => {
+  try {
+    const files = (req.files ?? []) as Express.Multer.File[]
+    if (files.length === 0) {
+      res.status(400).json({ error: 'No files uploaded', code: 'no_files' } as ApiError)
+      return
+    }
+
+    const includeSections = sectionsFromQuery(req.query.sections)
+    const comick = req.query.comick === 'true' || req.query.comick === '1'
+    const comickDelay = parseInt(String(req.query.comickDelay ?? '500'), 10)
+    const comickTimeout = parseInt(String(req.query.comickTimeout ?? '5000'), 10)
+    const opts: ParseOptions = { comick, comickDelay, comickTimeout }
+
+    const rescueOpts: RescueOptions = {
+      comick: true,
+      comickDelay,
+      comickTimeout,
+      kitsu: req.query.kitsu === 'true' || req.query.kitsu === '1',
+      anilist: req.query.anilist === 'true' || req.query.anilist === '1',
+      wayback: req.query.wayback === 'true' || req.query.wayback === '1',
+      waybackTimeout: parseInt(String(req.query.waybackTimeout ?? '10000'), 10)
+    }
+
+    const deepResult = await deepParseFiles(files.map((f) => f.path))
+    const deepBySlug = new Map(deepResult.entries.map((e) => [e.slug, e]))
+
+    const allParsed: ParsedManga[] = []
+    for (const file of files) {
+      let result = await parseHtmlFile(file.path, opts)
+      result = filterSections(result, includeSections)
+      result = await applyComick(result, opts)
+      allParsed.push(...result.entries)
+      try {
+        unlinkSync(file.path)
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+
+    const uniqueBySlug = new Map<string, ParsedManga>()
+    for (const entry of allParsed) {
+      if (!uniqueBySlug.has(entry.slug)) {
+        uniqueBySlug.set(entry.slug, entry)
+      }
+    }
+    const combined = Array.from(uniqueBySlug.values())
+
+    const { results, summary } = await rescueTitles(combined, rescueOpts, false, 5, deepBySlug)
+
+    res.json({
+      parse: {
+        totalUnique: combined.length,
+        totalNeedsReview: combined.filter((e) => e.needs_review).length
+      },
+      rescue: {
+        total: summary.total,
+        rescued: summary.rescued,
+        needs_review: summary.needs_review,
+        bySource: summary.bySource
+      },
+      results
+    })
+  } catch (err) {
+    console.error('[api] parse-and-rescue error', err)
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error',
+      code: 'parse_and_rescue_error'
     } as ApiError)
   }
 })

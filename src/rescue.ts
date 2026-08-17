@@ -1,16 +1,61 @@
-import type { ParsedManga, RescueOptions, RescueResult, TitleCandidate } from './types.js'
+import type { DeepMangaSignals, ParsedManga, RescueOptions, RescueResult, TitleCandidate } from './types.js'
 
 const MIN_RESCUE_CONFIDENCE = 0.6
 const HIGH_CONFIDENCE_API = 0.85
+const MIN_DEEP_PARSE_TITLE_LENGTH = 4
 
 /** Decide whether a candidate is trustworthy enough to auto-rescue. */
 function isTrustworthyCandidate(candidate: TitleCandidate): boolean {
   if (candidate.confidence < MIN_RESCUE_CONFIDENCE) return false
   if (isGibberishTitle(candidate.title)) return false
-  // Cover filenames and wayback titles are primary evidence.
-  if (candidate.source === 'cover_filename' || candidate.source === 'wayback') return true
+  // Cover filenames, wayback titles, and deep-parsed titles are primary evidence.
+  if (
+    candidate.source === 'cover_filename' ||
+    candidate.source === 'wayback' ||
+    candidate.source === 'deep_parse'
+  )
+    return true
   // Exact API matches only.
   return candidate.confidence >= HIGH_CONFIDENCE_API
+}
+
+/** Build title candidates from deep-parsed HTML signals, if available. */
+export function candidatesFromDeepSignals(deep?: DeepMangaSignals): TitleCandidate[] {
+  if (!deep) return []
+  const candidates: TitleCandidate[] = []
+
+  // Best display title across all occurrences (usually the longest, least truncated)
+  if (deep.display_title && deep.display_title.length >= MIN_DEEP_PARSE_TITLE_LENGTH) {
+    candidates.push({
+      source: 'deep_parse',
+      title: deep.display_title,
+      confidence: 0.65
+    })
+  }
+
+  // Image alt/title attributes sometimes hold the full title
+  for (const t of [...deep.signals.img_titles, ...deep.signals.img_alts, ...deep.signals.anchor_titles]) {
+    if (t.length >= MIN_DEEP_PARSE_TITLE_LENGTH && !candidates.some((c) => c.title === t)) {
+      candidates.push({
+        source: 'deep_parse',
+        title: t,
+        confidence: 0.6
+      })
+    }
+  }
+
+  // Nearby text can be noisy; only accept longer, cleaner strings
+  for (const t of deep.signals.nearby_text) {
+    if (t.length >= 8 && !candidates.some((c) => c.title === t)) {
+      candidates.push({
+        source: 'deep_parse',
+        title: t,
+        confidence: 0.45
+      })
+    }
+  }
+
+  return candidates
 }
 
 export function extractTitleFromCoverFilename(coverPath: string): TitleCandidate | null {
@@ -289,6 +334,89 @@ async function waybackLookup(
   }
 }
 
+/**
+ * Check Wayback Machine availability for a sample of slugs.
+ * Returns which slugs have snapshots, the newest snapshot timestamp,
+ * and the extracted title (if parseable) without doing a full rescue.
+ */
+export async function waybackSample(
+  slugs: string[],
+  opts: { limit?: number; timeoutMs?: number; parseTitles?: boolean } = {}
+): Promise<{
+  checked: number
+  withSnapshots: number
+  withTitles: number
+  errors: number
+  sample: Array<{
+    slug: string
+    available: boolean
+    snapshotUrl?: string
+    snapshotTimestamp?: string
+    title?: string
+    error?: string
+  }>
+}> {
+  const limit = opts.limit ?? 20
+  const timeoutMs = opts.timeoutMs ?? 10000
+  const parseTitles = opts.parseTitles ?? true
+  const sampleSlugs = slugs.slice(0, limit)
+
+  const results = await Promise.all(
+    sampleSlugs.map(async (slug) => {
+      try {
+        const url = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(
+          `readm.today/manga/${slug}`
+        )}&output=json&fl=timestamp,original,statuscode&filter=statuscode:200&collapse=digest&limit=1`
+
+        const cdx = (await fetchJson(url, { timeoutMs })) as [string[], ...string[][]] | null
+        if (!Array.isArray(cdx) || cdx.length < 2) {
+          return { slug, available: false }
+        }
+
+        const [timestamp, original] = cdx[1]
+        if (!timestamp || !original) {
+          return { slug, available: false }
+        }
+
+        const snapshotUrl = `https://web.archive.org/web/${timestamp}id_/${original}`
+
+        if (!parseTitles) {
+          return {
+            slug,
+            available: true,
+            snapshotUrl,
+            snapshotTimestamp: timestamp
+          }
+        }
+
+        const candidate = await waybackLookup(slug, timeoutMs)
+        return {
+          slug,
+          available: true,
+          snapshotUrl,
+          snapshotTimestamp: timestamp,
+          title: candidate?.title
+        }
+      } catch (err) {
+        return {
+          slug,
+          available: false,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      }
+    })
+  )
+
+  return {
+    checked: results.length,
+    withSnapshots: results.filter((r) => r.available).length,
+    withTitles: results.filter((r) => r.title).length,
+    errors: results.filter((r) => r.error).length,
+    sample: results
+  }
+}
+
+
 async function addApiCandidates(
   candidates: TitleCandidate[],
   query: string,
@@ -333,15 +461,20 @@ async function addApiCandidates(
  */
 export async function rescueTitle(
   entry: ParsedManga,
-  opts: RescueOptions = {}
+  opts: RescueOptions = {},
+  deep?: DeepMangaSignals
 ): Promise<RescueResult> {
   const candidates: TitleCandidate[] = []
 
-  // 1. Cover filename title
+  // 1. Deep-parsed HTML signals (display titles, alt/title attributes, nearby text)
+  const deepCandidates = candidatesFromDeepSignals(deep)
+  candidates.push(...deepCandidates)
+
+  // 2. Cover filename title
   const coverCandidate = extractTitleFromCoverFilename(entry.cover_path)
   if (coverCandidate) candidates.push(coverCandidate)
 
-  // 2. Displayed (truncated) title from the page, if available
+  // 3. Displayed (truncated) title from the page, if available
   if (entry.title && !isGibberishTitle(entry.title) && entry.title !== entry.slug) {
     candidates.push({
       source: 'humanized',
@@ -350,18 +483,18 @@ export async function rescueTitle(
     })
   }
 
-  // Decide query for APIs: best current candidate title, or humanized cover name
+  // 4. Decide query for APIs: prefer deep-parsed title, then best local candidate
   const bestLocal = candidates.slice().sort((a, b) => b.confidence - a.confidence)[0]
   const query = bestLocal?.title ?? entry.title
 
   await addApiCandidates(candidates, query, opts)
 
-  // 3. If the best local title differs from the slug/humanized, also try that
+  // 5. If the best local title differs from the slug/humanized, also try that
   if (entry.title && entry.title !== query && !isGibberishTitle(entry.title)) {
     await addApiCandidates(candidates, entry.title, opts)
   }
 
-  // 4. Wayback Machine for the original readm.today page
+  // 6. Wayback Machine for the original readm.today page
   if (opts.wayback) {
     const wb = await waybackLookup(entry.slug, opts.waybackTimeout)
     if (wb) candidates.push(wb)
@@ -397,7 +530,8 @@ export async function rescueTitles(
   entries: ParsedManga[],
   opts: RescueOptions = {},
   forceAll = false,
-  concurrency = 5
+  concurrency = 5,
+  deepBySlug?: Map<string, DeepMangaSignals>
 ): Promise<{ results: RescueResult[]; summary: { total: number; rescued: number; needs_review: number; bySource: Record<string, number> } }> {
   const targets = forceAll ? entries : entries.filter((e) => e.needs_review)
   const results: RescueResult[] = new Array(targets.length)
@@ -407,7 +541,8 @@ export async function rescueTitles(
     for (let i = startIndex; i < targets.length; i += concurrency) {
       const entry = targets[i]
       process.stderr.write(`Rescuing ${i + 1}/${targets.length}: ${entry.slug}\r`)
-      const result = await rescueTitle(entry, opts)
+      const deep = deepBySlug?.get(entry.slug)
+      const result = await rescueTitle(entry, opts, deep)
       results[i] = result
       if (result.best_candidate) {
         bySource[result.best_candidate.source] = (bySource[result.best_candidate.source] ?? 0) + 1

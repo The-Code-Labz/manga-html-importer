@@ -208,6 +208,117 @@ curl -X POST https://manga-html-importer.forge.neurolearninglabs.com/rescue \
 
 You can also rescue directly during `/parse` by adding `?rescue=true&kitsu=true&anilist=true&wayback=true`.
 
+### `POST /deep-parse`
+
+Second-pass parser that extracts **every possible title signal** from the HTML:
+
+- `h2`/`h3` display titles (longest occurrence wins)
+- `img` `alt` and `title` attributes
+- `a` `title` attributes
+- Any other `data-*` attributes on the card
+- Nearby text nodes
+
+This is especially useful for numeric slugs where the slug itself carries no title.
+
+```bash
+curl -X POST https://manga-html-importer.forge.neurolearninglabs.com/deep-parse \
+  -F 'files=@Profile___Read_Manga_Online_fav.html'
+```
+
+**Response:**
+
+```json
+{
+  "files": ["Profile___Read_Manga_Online_fav.html"],
+  "totalCards": 2248,
+  "uniqueSlugs": 1161,
+  "needsReview": 421,
+  "entries": [
+    {
+      "slug": "17318",
+      "title": "17318",
+      "display_title": "Fusoroi no Renr..",
+      "cover_path": "1587550898.jpg",
+      "list_section": "favorites",
+      "source_url": "https://readm.today/manga/17318",
+      "needs_review": true,
+      "occurrence_count": 1,
+      "candidate_titles": ["Fusoroi no Renr.."],
+      "signals": {
+        "display_titles": ["Fusoroi no Renr.."],
+        "img_alts": [],
+        "img_titles": [],
+        "anchor_titles": [],
+        "data_attributes": {},
+        "nearby_text": []
+      }
+    }
+  ]
+}
+```
+
+### `POST /parse-and-rescue`
+
+Combines `/parse` + `/deep-parse` + `/rescue` in one call. The deep-parsed title signals are passed into the rescuer so APIs get better query strings, and Wayback/comick/Kitsu/AniList are queried for numeric slugs.
+
+```bash
+curl -X POST 'https://manga-html-importer.forge.neurolearninglabs.com/parse-and-rescue?wayback=true&kitsu=true' \
+  -F 'files=@Profile___Read_Manga_Online_fav.html'
+```
+
+**Response:**
+
+```json
+{
+  "parse": {
+    "totalUnique": 1161,
+    "totalNeedsReview": 421
+  },
+  "rescue": {
+    "total": 421,
+    "rescued": 89,
+    "needs_review": 332,
+    "bySource": {
+      "deep_parse": 45,
+      "comick": 24,
+      "wayback": 12,
+      "kitsu": 8
+    }
+  },
+  "results": [...]
+}
+```
+
+### `POST /wayback-sample`
+
+Check the Wayback Machine for archived snapshots of numeric slugs **without** doing a full rescue. Useful for estimating how many titles are recoverable before burning through a long rescue job.
+
+```bash
+curl -X POST 'https://manga-html-importer.forge.neurolearninglabs.com/wayback-sample?limit=10' \
+  -H 'Content-Type: application/json' \
+  -d '{"slugs": ["17318", "19156", "21041"]}'
+```
+
+**Response:**
+
+```json
+{
+  "checked": 3,
+  "withSnapshots": 2,
+  "withTitles": 1,
+  "errors": 0,
+  "sample": [
+    {
+      "slug": "17318",
+      "available": true,
+      "snapshotUrl": "https://web.archive.org/web/20240515120000id_/https://readm.today/manga/17318",
+      "snapshotTimestamp": "20240515120000",
+      "title": "Fusoroi no Renraku"
+    }
+  ]
+}
+```
+
 ## Data model
 
 Each parsed manga entry has the following shape:
@@ -244,6 +355,24 @@ With comick.dev lookups:
 
 ```bash
 npm run start:cli -- --comick *.html
+```
+
+With full title rescue (comick + Wayback + Kitsu + AniList):
+
+```bash
+npm run start:cli -- --rescue-titles --rescue-wayback --rescue-kitsu --rescue-anilist *.html
+```
+
+Second-pass deep parse:
+
+```bash
+npm run start:cli -- deep-parse *.html
+```
+
+Wayback sample for numeric slugs:
+
+```bash
+npm run start:cli -- wayback-sample output/combined.json --limit 50
 ```
 
 ## Configuration

@@ -3,8 +3,9 @@ import { Command } from 'commander'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { lookupComick } from './comick.js'
+import { deepParseFiles } from './deepParser.js'
 import { parseHtmlFile } from './parser.js'
-import { rescueTitles } from './rescue.js'
+import { rescueTitles, waybackSample } from './rescue.js'
 import type { ParsedManga, ParseOptions, ParseSummary, RescueOptions } from './types.js'
 
 const program = new Command()
@@ -234,6 +235,85 @@ program
     for (const [source, count] of Object.entries(summary.bySource)) {
       console.error(`  ${source}: ${count}`)
     }
+    console.error(`\nOutput written to: ${outputDir}`)
+  })
+
+
+program
+  .command('deep-parse')
+  .description('Second-pass parse that extracts every possible title signal from HTML files')
+  .argument('<files...>', 'HTML files to parse')
+  .option('-o, --output <dir>', 'output directory', 'output')
+  .action(async (files: string[], options) => {
+    const outputDir = resolve(options.output)
+    await mkdir(outputDir, { recursive: true })
+
+    const filePaths = files.map((f) => resolve(f))
+    console.error(`Deep-parsing ${filePaths.length} file(s)...`)
+    const result = await deepParseFiles(filePaths)
+
+    await writeFile(
+      resolve(outputDir, 'deep-signals.json'),
+      JSON.stringify(result, null, 2)
+    )
+    await writeFile(
+      resolve(outputDir, 'deep-signals.ndjson'),
+      result.entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
+    )
+
+    console.error('\n--- Deep Parse Summary ---')
+    console.error(`Files parsed:      ${result.files.length}`)
+    console.error(`Total card hits:   ${result.totalCards}`)
+    console.error(`Unique slugs:      ${result.uniqueSlugs}`)
+    console.error(`Needs review:      ${result.needsReview}`)
+    console.error(`\nOutput written to: ${outputDir}`)
+  })
+
+program
+  .command('wayback-sample')
+  .description('Check Wayback Machine snapshots for a sample of numeric slugs')
+  .argument('<input>', 'JSON/NDJSON file or comma-separated slug list')
+  .option('-o, --output <dir>', 'output directory', 'output')
+  .option('-l, --limit <n>', 'number of slugs to sample', '20')
+  .option('-t, --timeout <ms>', 'request timeout', '10000')
+  .option('--no-titles', 'only check availability, do not parse titles')
+  .action(async (input: string, options) => {
+    const outputDir = resolve(options.output)
+    await mkdir(outputDir, { recursive: true })
+
+    let slugs: string[]
+    if (input.includes(',')) {
+      slugs = input.split(',').map((s) => s.trim()).filter(Boolean)
+    } else {
+      const raw = await readFile(resolve(input), 'utf8')
+      const entries: Array<{ slug: string }> = raw.trim().startsWith('[')
+        ? (JSON.parse(raw) as Array<{ slug: string }>)
+        : raw
+            .split('\n')
+            .filter((line) => line.trim().length > 0)
+            .map((line) => JSON.parse(line) as { slug: string })
+      slugs = entries.map((e) => e.slug)
+    }
+
+    const numericSlugs = slugs.filter((s) => /^\d+$/.test(s))
+    console.error(`Checking Wayback for ${numericSlugs.length} numeric slugs (sample limit: ${options.limit})...`)
+
+    const result = await waybackSample(numericSlugs, {
+      limit: parseInt(options.limit, 10),
+      timeoutMs: parseInt(options.timeout, 10),
+      parseTitles: options.titles !== false
+    })
+
+    await writeFile(
+      resolve(outputDir, 'wayback-sample.json'),
+      JSON.stringify(result, null, 2)
+    )
+
+    console.error('\n--- Wayback Sample Summary ---')
+    console.error(`Checked:        ${result.checked}`)
+    console.error(`With snapshots: ${result.withSnapshots}`)
+    console.error(`With titles:    ${result.withTitles}`)
+    console.error(`Errors:         ${result.errors}`)
     console.error(`\nOutput written to: ${outputDir}`)
   })
 

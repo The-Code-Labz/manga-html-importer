@@ -69,12 +69,40 @@ export interface RescueOptions {
 }
 
 export interface TitleCandidate {
-  source: 'cover_filename' | 'comick' | 'kitsu' | 'anilist' | 'wayback' | 'humanized'
+  source: 'cover_filename' | 'comick' | 'kitsu' | 'anilist' | 'wayback' | 'humanized' | 'deep_parse'
   title: string
   slug?: string
   cover_url?: string
   confidence: number
   url?: string
+}
+
+export interface DeepMangaSignals {
+  slug: string
+  title: string
+  display_title?: string
+  cover_path: string
+  list_section: string
+  source_url: string
+  needs_review: boolean
+  occurrence_count: number
+  candidate_titles: string[]
+  signals: {
+    display_titles: string[]
+    img_alts: string[]
+    img_titles: string[]
+    anchor_titles: string[]
+    data_attributes: Record<string, string[]>
+    nearby_text: string[]
+  }
+}
+
+export interface DeepParseResult {
+  files: string[]
+  totalCards: number
+  uniqueSlugs: number
+  needsReview: number
+  entries: DeepMangaSignals[]
 }
 
 export interface RescueResult {

@@ -20,10 +20,12 @@ Docuflow and other document parsers strip the HTML structure and return only the
   - Canonical slug
   - Cover image filename
   - List section: `plan-to-read`, `favorites`, `subscriptions`
+- **Second-pass deep parser** extracts every possible title signal: display titles, `img` alt/title attributes, anchor titles, `data-*` attributes, nearby text
 - Deduplicates by slug across files
 - Flags numeric-only slugs for manual review
 - Optional comick.dev cross-reference for canonical titles + covers
-- **Title rescue** for numeric slugs using cover filenames, comick.dev, Kitsu, AniList, and the Wayback Machine
+- **Title rescue** for numeric slugs using cover filenames, deep-parsed signals, comick.dev, Kitsu, AniList, and the Wayback Machine
+- **Wayback sample** endpoint to estimate recoverability before a full rescue job
 - HTTP API for uploading files and receiving JSON back
 - Outputs JSON, NDJSON, and a combined summary
 
@@ -70,6 +72,24 @@ Output lands in `output/`:
 | `--rescue-kitsu` | Use Kitsu during title rescue |
 | `--rescue-anilist` | Use AniList during title rescue |
 | `--rescue-wayback` | Use Wayback Machine during title rescue |
+
+### Deep parse (CLI)
+
+Extract every possible title signal from the HTML:
+
+```bash
+npm run start:cli -- deep-parse *.html
+```
+
+Output: `output/deep-signals.json` and `output/deep-signals.ndjson`.
+
+### Wayback sample (CLI)
+
+Check Wayback availability for numeric slugs before running a full rescue:
+
+```bash
+npm run start:cli -- wayback-sample output/combined.json --limit 50
+```
 
 ## Title Rescue
 
@@ -164,6 +184,34 @@ Send raw HTML in the request body.
 curl -X POST http://localhost:4050/parse-text \
   -H 'Content-Type: application/json' \
   -d '{"html": "<html>...</html>", "filename": "profile.html"}'
+```
+
+### `POST /deep-parse`
+
+Second-pass parser that extracts every possible title signal from the HTML.
+
+```bash
+curl -X POST http://localhost:4050/deep-parse \
+  -F 'files=@Profile___Read_Manga_Online_fav.html'
+```
+
+### `POST /parse-and-rescue`
+
+One-call parse + deep-parse + rescue. Deep-parsed signals are fed into the rescuer for better API queries.
+
+```bash
+curl -X POST 'http://localhost:4050/parse-and-rescue?wayback=true&kitsu=true&anilist=true' \
+  -F 'files=@Profile___Read_Manga_Online_fav.html'
+```
+
+### `POST /wayback-sample`
+
+Check Wayback Machine snapshots for a sample of numeric slugs without doing a full rescue.
+
+```bash
+curl -X POST 'http://localhost:4050/wayback-sample?limit=10' \
+  -H 'Content-Type: application/json' \
+  -d '{"slugs": ["17318", "19156", "21041"]}'
 ```
 
 ### Response format
