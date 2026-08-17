@@ -391,25 +391,35 @@ export async function rescueTitle(
 /**
  * Rescue titles for a list of entries. Only processes entries flagged
  * needs_review (numeric slugs) unless forceAll is true.
+ * Processes up to `concurrency` entries in parallel to speed up external API calls.
  */
 export async function rescueTitles(
   entries: ParsedManga[],
   opts: RescueOptions = {},
-  forceAll = false
+  forceAll = false,
+  concurrency = 5
 ): Promise<{ results: RescueResult[]; summary: { total: number; rescued: number; needs_review: number; bySource: Record<string, number> } }> {
   const targets = forceAll ? entries : entries.filter((e) => e.needs_review)
-  const results: RescueResult[] = []
+  const results: RescueResult[] = new Array(targets.length)
   const bySource: Record<string, number> = {}
 
-  for (let i = 0; i < targets.length; i++) {
-    const entry = targets[i]
-    process.stderr.write(`Rescuing ${i + 1}/${targets.length}: ${entry.slug}\r`)
-    const result = await rescueTitle(entry, opts)
-    results.push(result)
-    if (result.best_candidate) {
-      bySource[result.best_candidate.source] = (bySource[result.best_candidate.source] ?? 0) + 1
+  async function worker(startIndex: number) {
+    for (let i = startIndex; i < targets.length; i += concurrency) {
+      const entry = targets[i]
+      process.stderr.write(`Rescuing ${i + 1}/${targets.length}: ${entry.slug}\r`)
+      const result = await rescueTitle(entry, opts)
+      results[i] = result
+      if (result.best_candidate) {
+        bySource[result.best_candidate.source] = (bySource[result.best_candidate.source] ?? 0) + 1
+      }
     }
   }
+
+  const workers: Promise<void>[] = []
+  for (let w = 0; w < concurrency; w++) {
+    workers.push(worker(w))
+  }
+  await Promise.all(workers)
   process.stderr.write('\n')
 
   const rescued = results.filter((r) => r.rescued).length
