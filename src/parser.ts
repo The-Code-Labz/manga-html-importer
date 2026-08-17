@@ -17,6 +17,7 @@ interface ParserState {
   cardHref: string | null
   cardImgAttr: string | null
   cardTitle: string | null
+  cardDisplayTitle: string | null
   capturingTitle: boolean
 }
 
@@ -43,6 +44,7 @@ function createParserHandlers(
     cardHref: null,
     cardImgAttr: null,
     cardTitle: null,
+    cardDisplayTitle: null,
     capturingTitle: false
   }
 
@@ -72,6 +74,7 @@ function createParserHandlers(
           state.cardHref = null
           state.cardImgAttr = null
           state.cardTitle = null
+          state.cardDisplayTitle = null
           state.capturingTitle = false
           return
         }
@@ -125,6 +128,7 @@ function createParserHandlers(
           state.capturingTitle = false
           if (state.cardTitle) {
             state.cardTitle = state.cardTitle.trim()
+            state.cardDisplayTitle = state.cardTitle
           }
         }
 
@@ -145,7 +149,8 @@ function createParserHandlers(
                   cover_path: extractCoverPath(state.cardImgAttr ?? ''),
                   list_section: section,
                   source_url: canonicalUrl,
-                  needs_review: isNumericSlug(slug)
+                  needs_review: isNumericSlug(slug),
+                  display_title: state.cardDisplayTitle ?? undefined
                 })
               }
             }
@@ -156,6 +161,7 @@ function createParserHandlers(
           state.cardHref = null
           state.cardImgAttr = null
           state.cardTitle = null
+          state.cardDisplayTitle = null
           state.capturingTitle = false
         }
       }

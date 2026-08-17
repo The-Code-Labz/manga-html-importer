@@ -151,6 +151,63 @@ curl -X POST https://manga-html-importer.forge.neurolearninglabs.com/parse-text 
 
 Query parameters are the same as `/parse`.
 
+### `POST /rescue`
+
+Attempt to rescue real titles for already-parsed manga entries with numeric slugs.
+
+```bash
+curl -X POST https://manga-html-importer.forge.neurolearninglabs.com/rescue \
+  -H 'Content-Type: application/json' \
+  -d @combined.json
+```
+
+#### Rescue query parameters
+
+| Param | Type | Description |
+|---|---|---|
+| `kitsu` | boolean | Search Kitsu for titles/covers |
+| `anilist` | boolean | Search AniList for titles |
+| `wayback` | boolean | Query the Wayback Machine for archived readm.today pages |
+| `comickDelay` | number | Delay between API requests in ms (default: 500) |
+| `comickTimeout` | number | API request timeout in ms (default: 5000) |
+
+#### Rescue response
+
+```json
+{
+  "total": 933,
+  "rescued": 312,
+  "needs_review": 621,
+  "bySource": {
+    "cover_filename": 180,
+    "comick": 72,
+    "kitsu": 45,
+    "anilist": 10,
+    "wayback": 5
+  },
+  "results": [
+    {
+      "slug": "17318",
+      "original_title": "17318",
+      "display_title": "Fusoroi no Renr..",
+      "cover_path": "1587550898.jpg",
+      "list_section": "favorites",
+      "source_url": "https://readm.today/manga/17318",
+      "candidates": [...],
+      "best_candidate": {
+        "source": "kitsu",
+        "title": "Kitan Jojishi Mother Goose",
+        "confidence": 0.68
+      },
+      "needs_review": true,
+      "rescued": false
+    }
+  ]
+}
+```
+
+You can also rescue directly during `/parse` by adding `?rescue=true&kitsu=true&anilist=true&wayback=true`.
+
 ## Data model
 
 Each parsed manga entry has the following shape:

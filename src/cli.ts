@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { lookupComick } from './comick.js'
 import { parseHtmlFile } from './parser.js'
-import type { ParseOptions, ParseSummary } from './types.js'
+import { rescueTitles } from './rescue.js'
+import type { ParsedManga, ParseOptions, ParseSummary, RescueOptions } from './types.js'
 
 const program = new Command()
 
 program
   .name('manga-html-importer')
   .description('Parse readm.today profile HTML files for Manga Sanctuary import')
-  .version('1.0.0')
+  .version('1.1.0')
+
+program
+  .command('parse')
   .argument('<files...>', 'HTML files to parse')
   .option('-o, --output <dir>', 'output directory', 'output')
   .option('-c, --comick', 'cross-reference comick.dev for canonical titles/covers', false)
@@ -22,6 +26,10 @@ program
     'favorites',
     'subscriptions'
   ])
+  .option('--rescue-titles', 'attempt to rescue real titles for numeric slugs', false)
+  .option('--rescue-kitsu', 'use Kitsu during title rescue', false)
+  .option('--rescue-anilist', 'use AniList during title rescue', false)
+  .option('--rescue-wayback', 'use Wayback Machine during title rescue', false)
   .action(async (files: string[], options) => {
     const outputDir = resolve(options.output)
     await mkdir(outputDir, { recursive: true })
@@ -32,6 +40,17 @@ program
       comickDelay: parseInt(options.comickDelay, 10),
       comickTimeout: parseInt(options.comickTimeout, 10)
     }
+
+    const rescueOptions: RescueOptions = options.rescueTitles
+      ? {
+          comick: true,
+          comickDelay: parseInt(options.comickDelay, 10),
+          comickTimeout: parseInt(options.comickTimeout, 10),
+          kitsu: options.rescueKitsu,
+          anilist: options.rescueAnilist,
+          wayback: options.rescueWayback
+        }
+      : {}
 
     const includeSections = new Set(options.sections as string[])
 
@@ -65,7 +84,15 @@ program
         console.error('')
       }
 
-      // Update needsReview count after filtering/comick
+      // Optionally rescue numeric slugs
+      let rescueResults = null
+      if (options.rescueTitles && result.entries.some((e) => e.needs_review)) {
+        console.error('  Rescuing numeric slug titles...')
+        rescueResults = await rescueTitles(result.entries, rescueOptions)
+        console.error(`    rescued ${rescueResults.summary.rescued}/${rescueResults.summary.total}`)
+      }
+
+      // Update needsReview count after filtering/comick/rescue
       result.needsReview = result.entries.filter((e) => e.needs_review).length
 
       summary.files.push(result)
@@ -80,16 +107,15 @@ program
       const outName = basename(filePath, '.html') + '.json'
       await writeFile(
         resolve(outputDir, outName),
-        JSON.stringify(result, null, 2)
+        JSON.stringify({ ...result, rescue: rescueResults }, null, 2)
       )
       console.error(`  Wrote ${result.entries.length} entries to ${outName}`)
     }
 
     // Write combined deduplicated summary
-    const allSlugs = new Map<string, (typeof summary.files)[number]['entries'][number]>()
+    const allSlugs = new Map<string, ParsedManga>()
     for (const file of summary.files) {
       for (const entry of file.entries) {
-        // Prefer comick-enhanced entries; otherwise keep first seen
         if (!allSlugs.has(entry.slug)) {
           allSlugs.set(entry.slug, entry)
         }
@@ -98,6 +124,13 @@ program
     const combined = Array.from(allSlugs.values())
     const combinedNeedsReview = combined.filter((e) => e.needs_review).length
 
+    // Rescue combined numeric slugs if requested
+    let combinedRescue = null
+    if (options.rescueTitles && combined.some((e) => e.needs_review)) {
+      console.error('\nRescuing combined numeric slugs...')
+      combinedRescue = await rescueTitles(combined, rescueOptions)
+    }
+
     await writeFile(
       resolve(outputDir, 'combined.json'),
       JSON.stringify(
@@ -105,7 +138,8 @@ program
           ...summary,
           combined,
           combinedCount: combined.length,
-          combinedNeedsReview
+          combinedNeedsReview,
+          rescue: combinedRescue
         },
         null,
         2
@@ -118,6 +152,13 @@ program
     console.error(`Unique combined:        ${combined.length}`)
     console.error(`Needs review (raw):     ${summary.totalNeedsReview}`)
     console.error(`Needs review (unique):  ${combinedNeedsReview}`)
+    if (combinedRescue) {
+      console.error(`Rescued titles:         ${combinedRescue.summary.rescued}`)
+      console.error('By source:')
+      for (const [source, count] of Object.entries(combinedRescue.summary.bySource)) {
+        console.error(`  ${source}: ${count}`)
+      }
+    }
     console.error('By section:')
     for (const [section, count] of Object.entries(summary.bySection)) {
       console.error(`  ${section}: ${count}`)
@@ -129,6 +170,69 @@ program
       resolve(outputDir, 'combined.ndjson'),
       combined.map((e) => JSON.stringify(e)).join('\n') + '\n'
     )
+
+    if (combinedRescue) {
+      await writeFile(
+        resolve(outputDir, 'rescue.ndjson'),
+        combinedRescue.results.map((r) => JSON.stringify(r)).join('\n') + '\n'
+      )
+    }
+  })
+
+program
+  .command('rescue')
+  .description('Run title rescue on an existing JSON/NDJSON file of ParsedManga entries')
+  .argument('<input>', 'JSON or NDJSON file containing parsed manga entries')
+  .option('-o, --output <dir>', 'output directory', 'output')
+  .option('--comick', 'use comick.dev', true)
+  .option('--kitsu', 'use Kitsu', false)
+  .option('--anilist', 'use AniList', false)
+  .option('--wayback', 'use Wayback Machine', false)
+  .option('--delay <ms>', 'delay between API requests', '500')
+  .option('--timeout <ms>', 'API request timeout', '5000')
+  .action(async (input: string, options) => {
+    const outputDir = resolve(options.output)
+    await mkdir(outputDir, { recursive: true })
+
+    const raw = await readFile(resolve(input), 'utf8')
+    const entries: ParsedManga[] = raw.trim().startsWith('[')
+      ? (JSON.parse(raw) as ParsedManga[])
+      : raw
+          .split('\n')
+          .filter((line) => line.trim().length > 0)
+          .map((line) => JSON.parse(line) as ParsedManga)
+
+    const rescueOptions: RescueOptions = {
+      comick: options.comick,
+      comickDelay: parseInt(options.delay, 10),
+      comickTimeout: parseInt(options.timeout, 10),
+      kitsu: options.kitsu,
+      anilist: options.anilist,
+      wayback: options.wayback
+    }
+
+    console.error(`Rescuing titles for ${entries.length} entries...`)
+    const { results, summary } = await rescueTitles(entries, rescueOptions, true)
+
+    const base = basename(input, '.json').replace(/\.ndjson$/, '')
+    await writeFile(
+      resolve(outputDir, `${base}-rescue.json`),
+      JSON.stringify({ results, summary }, null, 2)
+    )
+    await writeFile(
+      resolve(outputDir, `${base}-rescue.ndjson`),
+      results.map((r) => JSON.stringify(r)).join('\n') + '\n'
+    )
+
+    console.error('\n--- Rescue Summary ---')
+    console.error(`Total:        ${summary.total}`)
+    console.error(`Rescued:      ${summary.rescued}`)
+    console.error(`Needs review: ${summary.needs_review}`)
+    console.error('By source:')
+    for (const [source, count] of Object.entries(summary.bySource)) {
+      console.error(`  ${source}: ${count}`)
+    }
+    console.error(`\nOutput written to: ${outputDir}`)
   })
 
 program.parse()

@@ -8,7 +8,8 @@ import multer from 'multer'
 import os from 'node:os'
 import { lookupComick } from './comick.js'
 import { parseHtmlFile, parseHtmlString } from './parser.js'
-import type { ParseOptions, ParsedManga, ParseResult } from './types.js'
+import { rescueTitles } from './rescue.js'
+import type { ParsedManga, ParseOptions, ParseResult, RescueOptions } from './types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -28,7 +29,7 @@ const upload = multer({
 
 const app = express()
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '50mb' }))
 
 interface ApiError {
   error: string
@@ -78,6 +79,26 @@ async function applyComick(result: ParseResult, opts: ParseOptions): Promise<Par
   }
 }
 
+function rescueOptionsFromQuery(req: Request): RescueOptions {
+  const delay = parseInt(String(req.query.comickDelay ?? '500'), 10)
+  const timeout = parseInt(String(req.query.comickTimeout ?? '5000'), 10)
+  return {
+    comick: true,
+    comickDelay: delay,
+    comickTimeout: timeout,
+    kitsu: req.query.kitsu === 'true' || req.query.kitsu === '1',
+    anilist: req.query.anilist === 'true' || req.query.anilist === '1',
+    wayback: req.query.wayback === 'true' || req.query.wayback === '1'
+  }
+}
+
+async function applyRescue(
+  entries: ParsedManga[],
+  opts: RescueOptions
+): Promise<{ results: Awaited<ReturnType<typeof rescueTitles>>['results']; summary: Awaited<ReturnType<typeof rescueTitles>>['summary'] }> {
+  return rescueTitles(entries, opts)
+}
+
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'manga-html-importer' })
 })
@@ -104,6 +125,8 @@ app.post(
       const comickDelay = parseInt(String(req.query.comickDelay ?? '500'), 10)
       const comickTimeout = parseInt(String(req.query.comickTimeout ?? '5000'), 10)
       const opts: ParseOptions = { comick, comickDelay, comickTimeout }
+      const doRescue = req.query.rescue === 'true' || req.query.rescue === '1'
+      const rescueOpts = doRescue ? rescueOptionsFromQuery(req) : null
 
       const results: ParseResult[] = []
       for (const file of files) {
@@ -134,6 +157,15 @@ app.post(
         bySection[entry.list_section] = (bySection[entry.list_section] ?? 0) + 1
       }
 
+      let rescue = null
+      if (doRescue) {
+        const { results: rescueResults, summary: rescueSummary } = await applyRescue(
+          combined,
+          rescueOpts!
+        )
+        rescue = { results: rescueResults, summary: rescueSummary }
+      }
+
       res.json({
         files: results.map((r) => ({
           file: r.file,
@@ -145,6 +177,7 @@ app.post(
         totalUnique: combined.length,
         totalNeedsReview: combined.filter((e) => e.needs_review).length,
         bySection,
+        rescue,
         combined
       })
     } catch (err) {
@@ -171,10 +204,21 @@ app.post('/parse-text', requireApiKey, async (req: Request, res: Response) => {
     const comickDelay = parseInt(String(req.query.comickDelay ?? '500'), 10)
     const comickTimeout = parseInt(String(req.query.comickTimeout ?? '5000'), 10)
     const opts: ParseOptions = { comick, comickDelay, comickTimeout }
+    const doRescue = req.query.rescue === 'true' || req.query.rescue === '1'
+    const rescueOpts = doRescue ? rescueOptionsFromQuery(req) : null
 
     let result = await parseHtmlString(html, fileName, opts)
     result = filterSections(result, includeSections)
     result = await applyComick(result, opts)
+
+    let rescue = null
+    if (doRescue) {
+      const { results: rescueResults, summary: rescueSummary } = await applyRescue(
+        result.entries,
+        rescueOpts!
+      )
+      rescue = { results: rescueResults, summary: rescueSummary }
+    }
 
     res.json({
       file: result.file,
@@ -182,6 +226,7 @@ app.post('/parse-text', requireApiKey, async (req: Request, res: Response) => {
       entries: result.entries.length,
       duplicatesRemoved: result.duplicatesRemoved,
       needsReview: result.needsReview,
+      rescue,
       combined: result.entries
     })
   } catch (err) {
@@ -189,6 +234,33 @@ app.post('/parse-text', requireApiKey, async (req: Request, res: Response) => {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Internal server error',
       code: 'parse_error'
+    } as ApiError)
+  }
+})
+
+app.post('/rescue', requireApiKey, async (req: Request, res: Response) => {
+  try {
+    const entries = Array.isArray(req.body) ? (req.body as ParsedManga[]) : null
+    if (!entries || entries.length === 0) {
+      res.status(400).json({ error: 'Expected JSON array of ParsedManga entries', code: 'bad_request' } as ApiError)
+      return
+    }
+
+    const rescueOpts = rescueOptionsFromQuery(req)
+    const { results, summary } = await applyRescue(entries, rescueOpts)
+
+    res.json({
+      total: summary.total,
+      rescued: summary.rescued,
+      needs_review: summary.needs_review,
+      bySource: summary.bySource,
+      results
+    })
+  } catch (err) {
+    console.error('[api] rescue error', err)
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Internal server error',
+      code: 'rescue_error'
     } as ApiError)
   }
 })

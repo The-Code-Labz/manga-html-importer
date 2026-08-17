@@ -23,6 +23,7 @@ Docuflow and other document parsers strip the HTML structure and return only the
 - Deduplicates by slug across files
 - Flags numeric-only slugs for manual review
 - Optional comick.dev cross-reference for canonical titles + covers
+- **Title rescue** for numeric slugs using cover filenames, comick.dev, Kitsu, AniList, and the Wayback Machine
 - HTTP API for uploading files and receiving JSON back
 - Outputs JSON, NDJSON, and a combined summary
 
@@ -65,8 +66,53 @@ Output lands in `output/`:
 | `--comick-delay <ms>` | Delay between comick requests (default: 500) |
 | `--comick-timeout <ms>` | Timeout for comick requests (default: 5000) |
 | `--sections <sections...>` | Sections to include (default: plan-to-read favorites subscriptions) |
+| `--rescue-titles` | Attempt to rescue real titles for numeric slugs |
+| `--rescue-kitsu` | Use Kitsu during title rescue |
+| `--rescue-anilist` | Use AniList during title rescue |
+| `--rescue-wayback` | Use Wayback Machine during title rescue |
 
-## API Usage
+## Title Rescue
+
+Numeric-only readm.today slugs (e.g. `17318`) have no usable title in the URL. The rescue module tries to recover the real title from multiple sources:
+
+1. **Cover filename** — many numeric slugs still have a human-readable cover image name like `dracu_riot_honey.jpg`
+2. **comick.dev** — search by the best available title candidate
+3. **Kitsu** — search by the best available title candidate
+4. **AniList** — search by the best available title candidate
+5. **Wayback Machine** — fetch archived `readm.today/manga/{slug}` pages and extract the page title
+
+Rescue is conservative: only high-confidence results are marked `rescued: true`. Fuzzy API matches remain `needs_review: true` so you can manually verify them.
+
+### CLI rescue
+
+```bash
+npm run start:cli -- parse *.html --rescue-titles --rescue-kitsu --rescue-anilist --rescue-wayback
+```
+
+Or run rescue on an existing parsed file:
+
+```bash
+npm run start:cli -- rescue output/combined.ndjson --kitsu --anilist --wayback
+```
+
+### API rescue
+
+Upload HTML and rescue numeric slugs in one call:
+
+```bash
+curl -X POST 'http://localhost:4050/parse?rescue=true&kitsu=true&anilist=true&wayback=true' \
+  -F 'files=@Profile___Read_Manga_Online.html'
+```
+
+Or send already-parsed entries to `/rescue`:
+
+```bash
+curl -X POST 'http://localhost:4050/rescue?kitsu=true&anilist=true&wayback=true' \
+  -H 'Content-Type: application/json' \
+  -d @output/combined.json
+```
+
+Rescue response includes `rescued`, `needs_review`, `best_candidate`, and all `candidates` with confidence scores.
 
 Start the server:
 
