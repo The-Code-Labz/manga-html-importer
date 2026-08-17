@@ -84,9 +84,11 @@ program
         console.error('')
       }
 
-      // Optionally rescue numeric slugs
+      // Optionally rescue numeric slugs. When multiple files are passed, we skip
+      // per-file rescue to avoid duplicate API work; combined rescue handles the
+      // unique slugs once at the end.
       let rescueResults = null
-      if (options.rescueTitles && result.entries.some((e) => e.needs_review)) {
+      if (options.rescueTitles && files.length === 1 && result.entries.some((e) => e.needs_review)) {
         console.error('  Rescuing numeric slug titles...')
         rescueResults = await rescueTitles(result.entries, rescueOptions)
         console.error(`    rescued ${rescueResults.summary.rescued}/${rescueResults.summary.total}`)
